@@ -1,0 +1,41 @@
+# ======================
+# Python
+# ======================
+backend/.venv/
+backend/__pycache__/
+backend/**/*.pyc
+backend/*.db
+backend/*.sqlite3
+backend/.env
+
+# ======================
+# Node / Next.js
+# ======================
+web/node_modules/
+web/.next/
+web/.env.local
+web/dist/
+
+# ======================
+# Env files
+# ======================
+.env
+*.env
+
+# ======================
+# OS
+# ======================
+.DS_Store
+Thumbs.db
+
+# ======================
+# Logs
+# ======================
+*.log
+
+# ======================
+# Generated videos / storage
+# ======================
+backend/_assets/
+backend/storage/
+text2video/_assets/
