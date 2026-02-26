@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "overlays": [
+    {
+      "type": "text",
+      "text": "Scene 1\\: dialogue coverage / reaction shot, subtle motion, Hook your viewer in one sentence. Explain the idea clearly. ",
+      "start": 0.3,
+      "end": 7.6,
+      "style": "lower_third",
+      "anim": "slide_fade"
+    }
+  ]
+}

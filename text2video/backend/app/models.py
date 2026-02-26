@@ -1,7 +1,9 @@
 import enum
 from datetime import datetime
-from sqlalchemy import String, Text, DateTime, Enum, Integer, ForeignKey, Boolean
+
+from sqlalchemy import String, Text, DateTime, Enum, Integer, ForeignKey
 from sqlalchemy.orm import Mapped, mapped_column, relationship
+
 from .db import Base
 
 
@@ -65,6 +67,12 @@ class Shot(Base):
     idx: Mapped[int] = mapped_column(Integer)
     duration_s: Mapped[int] = mapped_column(Integer)
     shot_type: Mapped[str] = mapped_column(String(20))  # HERO/STANDARD/BRIDGE
+
+    # ✅ NEW: generator kind (used by tasks.py)
+    # "video" (default) -> WAN2 / test-pattern pipeline
+    # "animation"       -> your new text-to-animation renderer
+    kind: Mapped[str] = mapped_column(String(20), default="video")
+
     prompt: Mapped[str] = mapped_column(Text)
     negative_prompt: Mapped[str] = mapped_column(Text, default="")
     status: Mapped[ShotStatus] = mapped_column(
@@ -73,7 +81,7 @@ class Shot(Base):
     )
     asset_path: Mapped[str | None] = mapped_column(String(400), nullable=True)
 
-    # ✅ NEW COLUMN: stores animation instructions as JSON string
+    # ✅ stores ffmpeg-based animation instructions as JSON string
     animation_json: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     error: Mapped[str | None] = mapped_column(Text, nullable=True)

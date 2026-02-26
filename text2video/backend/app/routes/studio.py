@@ -1,13 +1,17 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 
-from fastapi import APIRouter, HTTPException
+import pyttsx3
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
+from sqlalchemy.orm import Session
 
 from ..config import settings
+from ..db import get_db
+from ..models import Project
 
 router = APIRouter(prefix="/studio", tags=["studio"])
 
@@ -20,7 +24,8 @@ class Voice(BaseModel):
 class NarrateRequest(BaseModel):
     project_id: int
     text: str
-    voice_id: str
+    voice_id: Optional[str] = None
+    rate: int = 175
 
 
 def _project_dir(project_id: int) -> Path:
@@ -40,36 +45,62 @@ def _best_video_path(project_id: int) -> Path:
     raise FileNotFoundError("No render found")
 
 
+def _tts_engine() -> pyttsx3.Engine:
+    # pyttsx3 selects an OS engine (SAPI5 on Windows, NSSS on macOS, eSpeak on Linux)
+    return pyttsx3.init()
+
+
 @router.get("/voices", response_model=List[Voice])
 def list_voices():
-    """
-    Return available voices for the dropdown.
-    Replace this list with your real voice inventory later.
-    """
-    return [
-        Voice(id="default", label="Default"),
-        Voice(id="female_1", label="Female 1"),
-        Voice(id="male_1", label="Male 1"),
-    ]
+    """Return available local TTS voices (pyttsx3)."""
+    try:
+        engine = _tts_engine()
+        voices = engine.getProperty("voices") or []
+        out: List[Voice] = []
+        for v in voices:
+            vid = getattr(v, "id", "") or ""
+            name = getattr(v, "name", "") or vid
+            if not vid:
+                continue
+            out.append(Voice(id=vid, label=name))
+        if not out:
+            out = [Voice(id="default", label="Default")]
+        return out
+    except Exception:
+        return [Voice(id="default", label="Default")]
 
 
 @router.post("/narrate")
-def narrate(req: NarrateRequest):
-    """
-    Creates narration.wav under backend/_assets/project_{id}/narration.wav.
-    TODO: Wire to your existing TTS function.
-    """
+def narrate(req: NarrateRequest, db: Session = Depends(get_db)):
+    """Generate narration.wav for a project."""
+    project = db.get(Project, req.project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    text = (req.text or "").strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="Text is empty")
+
     out_dir = _project_dir(req.project_id)
     out_dir.mkdir(parents=True, exist_ok=True)
+    out_wav = out_dir / "narration.wav"
 
-    # TODO: Replace this with your real narration generator that writes narration.wav
-    # Example:
-    # generate_narration_wav(text=req.text, voice_id=req.voice_id, out_path=out_dir / "narration.wav")
+    try:
+        engine = _tts_engine()
+        engine.setProperty("rate", int(req.rate or 175))
 
-    raise HTTPException(
-        status_code=501,
-        detail="Narration generation not wired yet. Connect your TTS function here.",
-    )
+        if req.voice_id and req.voice_id != "default":
+            try:
+                engine.setProperty("voice", req.voice_id)
+            except Exception:
+                pass
+
+        engine.save_to_file(text, str(out_wav))
+        engine.runAndWait()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"TTS failed: {e}")
+
+    return {"ok": True, "path": str(out_wav), "chars": len(text)}
 
 
 @router.get("/video/{project_id}")

@@ -39,3 +39,10 @@ Thumbs.db
 backend/_assets/
 backend/storage/
 text2video/_assets/
+
+
+.venv/
+__pycache__/
+*.pyc
+text2video.db
+node_modules/

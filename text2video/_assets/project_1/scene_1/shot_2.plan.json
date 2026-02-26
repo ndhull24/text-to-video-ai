@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "overlays": [
+    {
+      "type": "text",
+      "text": "Scene 1\\: main action moment, cinematic camera, Hook your viewer in one sentence. Explain the idea clearly. Show a quick",
+      "start": 0.3,
+      "end": 5.6,
+      "style": "lower_third",
+      "anim": "slide_fade"
+    }
+  ]
+}

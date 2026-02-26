@@ -1,0 +1,4 @@
+file 'C:/Users/Navdeep/Desktop/VS CODE project/Text-to-speech with prof. Harpreet/text2video/_assets/project_21/scene_1/shot_1_base.mp4'
+file 'C:/Users/Navdeep/Desktop/VS CODE project/Text-to-speech with prof. Harpreet/text2video/_assets/project_21/scene_1/shot_2_base.mp4'
+file 'C:/Users/Navdeep/Desktop/VS CODE project/Text-to-speech with prof. Harpreet/text2video/_assets/project_21/scene_2/shot_1_base.mp4'
+file 'C:/Users/Navdeep/Desktop/VS CODE project/Text-to-speech with prof. Harpreet/text2video/_assets/project_21/scene_2/shot_2_base.mp4'

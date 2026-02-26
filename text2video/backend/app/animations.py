@@ -1,115 +1,207 @@
+from __future__ import annotations
+
 import json
 import re
 import subprocess
 from pathlib import Path
+from typing import Any, Dict, Optional, Tuple
 
-def _safe_text(s: str) -> str:
-    # keep it simple: remove weird chars that break ffmpeg drawtext
-    s = re.sub(r"\s+", " ", (s or "").strip())
-    s = s.replace(":", "\\:")  # ffmpeg drawtext uses ':' as separator
-    s = s.replace("'", "\\'")
-    return s[:120]  # cap length for readability
+from .config import settings
 
-def default_animation_plan(text: str, dur: int) -> dict:
-    """
-    Minimal plan:
-    - show one line of text in lower third
-    - fade in, slide slightly, then fade out
-    """
-    t = _safe_text(text) or " "
-    dur = max(1, int(dur or 6))
-    start = 0.3
-    end = max(start + 1.2, dur - 0.4)
+
+def _run(cmd: list[str]) -> None:
+    subprocess.run(cmd, check=True, capture_output=True, text=True)
+
+
+def default_animation_plan(prompt: str, duration_s: int) -> Dict[str, Any]:
+    # Motion type based on simple keyword heuristics
+    p = (prompt or "").lower()
+    if any(k in p for k in ["fast", "urgent", "quick", "run", "chase", "explode", "action"]):
+        motion = "pan"
+        intensity = 0.22
+    elif any(k in p for k in ["calm", "slow", "quiet", "peace", "soft", "gentle"]):
+        motion = "kenburns"
+        intensity = 0.10
+    else:
+        motion = "kenburns"
+        intensity = 0.18
 
     return {
-        "version": 1,
-        "overlays": [
-            {
-                "type": "text",
-                "text": t,
-                "start": start,
-                "end": end,
-                "style": "lower_third",
-                "anim": "slide_fade",
-            }
-        ],
+        "type": motion,
+        "intensity": intensity,    # how strong the motion is
+        "fps": 30,
+        "text": "auto",            # enable auto text overlay
     }
+
+
+def parse_plan(animation_json: Optional[str]) -> Dict[str, Any]:
+    if not animation_json:
+        return {}
+    try:
+        return json.loads(animation_json)
+    except Exception:
+        return {}
+
+
+def _extract_title_sub(prompt: str) -> Tuple[str, str]:
+    """
+    Turn the shot prompt into a short, readable on-screen caption.
+    Heuristic:
+    - Title: first sentence / first ~7 words
+    - Subline: next clause trimmed
+    """
+    s = (prompt or "").strip()
+    s = re.sub(r"\s+", " ", s)
+    if not s:
+        return ("", "")
+
+    # split on sentence boundaries
+    parts = re.split(r"[.!?]\s+", s)
+    first = parts[0].strip()
+    rest = " ".join(parts[1:]).strip()
+
+    words = first.split(" ")
+    title = " ".join(words[:7]).strip()
+    if len(words) > 7:
+        title = title + "…"
+
+    sub = rest[:80].strip()
+    if len(rest) > 80:
+        sub = sub + "…"
+
+    # if no "rest", take remaining from first
+    if not sub and len(words) > 7:
+        sub = " ".join(words[7:])[:80].strip()
+        if len(" ".join(words[7:])) > 80:
+            sub += "…"
+
+    return (title, sub)
+
+
+# --- SAFE text escaping for ffmpeg drawtext ---
+def _escape_drawtext_text(s: str) -> str:
+    """
+    Escape text for ffmpeg drawtext.
+    - Escape backslashes first
+    - Escape single quotes because we wrap text='...'
+    - Escape colon because ffmpeg uses it as key/value separator
+    - Escape comma because ffmpeg uses it to separate filters
+    """
+    if s is None:
+        return ""
+    s = str(s)
+    s = s.replace("\\", "\\\\")
+    s = s.replace("'", "\\'")
+    s = s.replace(":", "\\:")
+    s = s.replace(",", "\\,")
+    return s
+
 
 def apply_animations_ffmpeg(
     input_mp4: str,
     output_mp4: str,
-    plan: dict,
-    font_path: str | None = None,
+    duration_s: int,
+    plan: Dict[str, Any],
+    prompt_for_text: str = "",
 ) -> None:
     """
-    Burns animated text overlays onto video using ffmpeg drawtext.
+    Apply:
+    - motion (zoom/pan)
+    - text overlay (animated lower-third)
     """
-    overlays = (plan or {}).get("overlays", [])
-    if not overlays:
-        # no overlays: just copy
-        Path(output_mp4).parent.mkdir(parents=True, exist_ok=True)
-        subprocess.run(["ffmpeg", "-y", "-i", input_mp4, "-c", "copy", output_mp4], check=True)
-        return
+    inp = Path(input_mp4)
+    out = Path(output_mp4)
+    out.parent.mkdir(parents=True, exist_ok=True)
 
-    # pick a default font (Windows-friendly)
-    # You can pass settings.font_path later; for now hardcode a safe default if missing.
-    if not font_path:
-        # common Windows font path
-        candidate = r"C:\Windows\Fonts\arial.ttf"
-        font_path = candidate if Path(candidate).exists() else ""
+    fps = int(plan.get("fps", 30))
+    dur = max(1, int(duration_s))
+    motion_type = (plan.get("type") or "kenburns").lower()
+    intensity = float(plan.get("intensity", 0.18))
 
-    filters = []
-    for ov in overlays:
-        if ov.get("type") != "text":
-            continue
-
-        text = _safe_text(ov.get("text", ""))
-        start = float(ov.get("start", 0.0))
-        end = float(ov.get("end", 2.0))
-
-        # Lower third position baseline
-        # x moves slightly from left (slide in), y fixed near bottom
-        # alpha fades in/out using expressions
-        # enable only between start/end
-        x_expr = "w*0.08 + (1 - min(1,(t-{s})/0.6))*40".format(s=start)  # slides from +40px to 0
-        y_expr = "h*0.78"
-
-        # fade: ramp up 0.4s, ramp down last 0.4s
-        alpha_expr = (
-            "if(lt(t,{s}),0,"
-            " if(lt(t,{s}+0.4),(t-{s})/0.4,"
-            "  if(lt(t,{e}-0.4),1,"
-            "   if(lt(t,{e}),( {e}-t)/0.4,0)"
-            "  )"
-            " )"
-            ")"
-        ).format(s=start, e=end)
-
-        draw = (
-            "drawtext="
-            f"fontfile='{font_path}':"
-            f"text='{text}':"
-            "fontsize=48:"
-            "fontcolor=white:"
-            "borderw=3:bordercolor=black@0.6:"
-            f"x='{x_expr}':y='{y_expr}':"
-            f"alpha='{alpha_expr}':"
-            f"enable='between(t,{start},{end})'"
+    # ----- Motion filter -----
+    if motion_type == "kenburns":
+        # zoom from 1 -> 1+intensity across duration
+        vf_motion = (
+            f"trim=duration={dur},setpts=PTS-STARTPTS,"
+            f"scale=iw*1.35:ih*1.35,"
+            f"zoompan=z='1+{intensity}*on/({dur}*{fps})':"
+            f"x='(iw-iw/zoom)/2':y='(ih-ih/zoom)/2':d=1:s=iwxih:fps={fps}"
         )
-        filters.append(draw)
+    else:
+        # pan to the right
+        pan_px = intensity  # use intensity as fraction of width
+        vf_motion = (
+            f"trim=duration={dur},setpts=PTS-STARTPTS,"
+            f"scale=iw*1.20:ih*1.20,"
+            f"crop=iw:ih:x='(iw*{pan_px})*t/{dur}':y='0',fps={fps}"
+        )
 
-    vf = ",".join(filters) if filters else "null"
+    # ----- Text overlay filter -----
+    # Prioritize the explicitly stored educational caption over the visual generation prompt
+    display_text = plan.get("caption") or prompt_for_text
+    title, sub = _extract_title_sub(display_text)
+    fontfile = settings.font_path.replace("\\", "/")
 
-    Path(output_mp4).parent.mkdir(parents=True, exist_ok=True)
+    safe_title = _escape_drawtext_text(title)
+    safe_sub = _escape_drawtext_text(sub)
+
+    # lower-third box position
+    # animate slide-up in first 0.5s and fade out last 0.5s
+    # y(t) from h to h-160, and alpha fades in/out
+    box_h = 160
+    pad = 28
+    box_y_expr = f"h-{box_h}-({pad}) + (1 - min(t/0.5\\,1))*50"  # slides up 50px
+    alpha_expr = f"if(lt(t\\,0.35)\\, t/0.35\\, if(gt(t\\,{dur}-0.35)\\, ({dur}-t)/0.35\\, 1))"
+
+    draw_title = (
+        f"drawtext=fontfile='{fontfile}':"
+        f"text='{safe_title}':"
+        f"fontsize=44:"
+        f"fontcolor=white@{alpha_expr}:"
+        f"x={pad+22}:"
+        f"y=({box_y_expr})+20:"
+        f"shadowcolor=black@0.55:"
+        f"shadowx=2:"
+        f"shadowy=2"
+    )
+
+    draw_sub = (
+        f"drawtext=fontfile='{fontfile}':"
+        f"text='{safe_sub}':"
+        f"fontsize=28:"
+        f"fontcolor=white@{alpha_expr}:"
+        f"x={pad+22}:"
+        f"y=({box_y_expr})+78:"
+        f"shadowcolor=black@0.45:"
+        f"shadowx=2:"
+        f"shadowy=2"
+    )
+
+    # Use a semi-transparent box + two lines of text
+    vf_text = (
+        f"drawbox=x={pad}:y=h-{box_h}-{pad}:w=w-{pad*2}:h={box_h}:color=black@0.45:t=fill,"
+        f"{draw_title},"
+        f"{draw_sub}"
+    )
+
+    # Combine all
+    vf = f"{vf_motion},{vf_text},format=yuv420p"
 
     cmd = [
         "ffmpeg",
         "-y",
-        "-i", input_mp4,
-        "-vf", vf,
-        "-c:v", "libx264",
-        "-pix_fmt", "yuv420p",
-        "-c:a", "copy",
-        output_mp4,
+        "-i",
+        str(inp),
+        "-vf",
+        vf,
+        "-t",
+        str(dur),
+        "-c:v",
+        "libx264",
+        "-pix_fmt",
+        "yuv420p",
+        "-movflags",
+        "+faststart",
+        str(out),
     ]
-    subprocess.run(cmd, check=True, capture_output=True, text=True)
+    _run(cmd)
